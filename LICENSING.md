@@ -1,7 +1,7 @@
 # Licensing
 
-FOMAJAM is licensed under GPL-3.0-only (see `LICENSE`), like Felucca, SLOOP and Dinghy, which it builds on. Anyone who
-receives a firmware built from this project is also entitled to its source code.
+UNIBOX is licensed under GPL-3.0-only (see `LICENSE`). It is built on FOMAJAM, which is built on Felucca, SLOOP and
+Dinghy. Anyone who receives a firmware built from this project is also entitled to its source code.
 
 ## Who wrote what
 
@@ -10,7 +10,7 @@ receives a firmware built from this project is also entitled to its source code.
 | `platform/hal/`, `platform/loader/`, `platform/src/`, `platform/crt0.S`, `platform/app.ld`, `tools/fm1pkg_make.py`, `tools/lz4blk.py`, `web/fm1ota.js`, `web/fm1pkg.js`, the FM-1 parts of `tools/build.py` | Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments ([Felucca](https://github.com/hugelton/Felucca)), including the changes made by [SLOOP](https://github.com/isod89/sloop-fm1) (isod89), as carried by [Dinghy](https://github.com/zvenson/dinghy) (zvenson) and [X0X](https://github.com/charlesvestal/fm1-x0x) (Charles Vestal) |
 | `platform/fm1.c`                                                                                                                                                                                            | Based on Dinghy's `platform.c` (zvenson), adapted to `fm1.h`                                                                                                                                                                                                                                                                                          |
 | `platform/fm1.h`, `platform/common.c`, `platform/web.c`, `web/` (the page and the emulator), `fm1`                                                                                                          | [foma](https://github.com/konsumer/foma)                                                                                                                                                                                                                                                                                                              |
-| `src/`, `tools/drums.py`, `tools/roms.py`, `tools/samples.py`, `tools/tables.py`, `test/`, `firmware.json`, and FOMAJAM's changes to the files above                                                        | FOMAJAM's authors                                                                                                                                                                                                                                                                                                                                     |
+| `src/`, `tools/drums.py`, `tools/roms.py`, `tools/samples.py`, `tools/tables.py`, `test/`, `firmware.json`, and FOMAJAM's changes to the files above                                                        | FOMAJAM's authors, with UNIBOX's later changes                                                                                                                                                                                                                                                                                                        |
 
 The modeled drum machines (`tools/drums.py`, the `src/drums.h` it generates, and `src/drums.c`) are ported from
 trommelsynthesizer in [poketrack](https://github.com/konsumer/poketrack) (zlib license), by the same author.
@@ -28,6 +28,19 @@ versions.
 
 STRING (`src/eng_string.h`) and SUPERSAW (`src/eng_supersaw.h`) are FOMAJAM's own. SUPERSAW's detune and mix curves
 follow Adam Szabo's published measurements of the Roland JP-8000 ("How to Emulate the Super Saw", 2010).
+
+UNIBOX adds four engines:
+
+- **SH-101** (`src/eng_sh101.h`) and the **wavetable** synth (`src/eng_wt.h`, `src/wt_data.h`) are written for this
+  project. They call Felucca-Engines' `dsp.c` helpers (MIT).
+- **TB-303** (`src/eng_303.h`, `src/dsp/bass303.c`, `src/dsp/bass303.h`, `src/dsp/fastmath.h`, `src/dsp/x0x_param.h`)
+  is the X0X port of Open303 (Robin Schmidt, MIT) with the Devilfish ranges and the Soft / RAT drive of schwung-303
+  (GPL-3.0; the RAT model is from davemollen/dm-Rat, GPL-3.0). Copyright follows those files' headers.
+- **Juno** (`src/eng_juno.h`) wraps the FM-106 DCO, ladder filter and chorus (`src/fm106/`, GPL-3.0-only). FM-106
+  ports that engine from [ultramaster_kr106](https://github.com/kayrockscreenprinting/ultramaster_kr106).
+
+The 808 and 909 here are FOMAJAM's modeled voices, not the X0X sample engines. LinnDrum and DMX are the ROM recordings
+FOMAJAM already ships; CR-78 is the modeled voice.
 
 The reverb in `src/fx.c` uses the delay lengths and structure of Jezar's Freeverb, which is public domain.
 

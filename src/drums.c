@@ -12,6 +12,7 @@
 #include "gains.h"
 #include "groove.h"
 #include "roms.h"
+#include "sampler.h"
 #include "samples.h"
 #include "tables.h"
 
@@ -21,7 +22,8 @@
 #define M_ROM M_MODELLED
 #define M_SMP (M_MODELLED + ROM_MACHINES) /* when there are samples */
 #define IS_SMP(m) (SAMPLE_COUNT > 0 && (m) == M_SMP)
-#define M_SYNTH (M_SMP + (SAMPLE_COUNT > 0)) /* synths.c's engines from here */
+#define M_USR (M_SMP + (SAMPLE_COUNT > 0))
+#define M_SYNTH (M_USR + 1) /* synths.c's engines from here */
 
 static int clamp(int v, int lo, int hi) {
   return v < lo ? lo : v > hi ? hi
@@ -35,6 +37,8 @@ int machine_count(void) { return M_MIDI + 1; }
 
 int machine_midi(int m) { return m == M_MIDI; }
 
+int machine_usr(int m) { return m == M_USR; }
+
 int machine_synth(int m) { return m >= M_SYNTH; }
 
 int machine_engine(int m) { return m >= M_SYNTH && m < M_MIDI ? m - M_SYNTH : -1; }
@@ -42,6 +46,7 @@ int machine_engine(int m) { return m >= M_SYNTH && m < M_MIDI ? m - M_SYNTH : -1
 const char *machine_name(int m) {
   return m < M_ROM ? MODEL_NAME[m] : m < M_SMP ? ROM_NAME[m - M_ROM]
                                  : IS_SMP(m)   ? "SMP"
+                                 : m == M_USR  ? "USR"
                                  : m == M_MIDI ? "MIDI"
                                                : synth_name(m - M_SYNTH);
 }
@@ -49,6 +54,7 @@ const char *machine_name(int m) {
 const char *machine_label(int m) {
   return m < M_ROM ? MODEL_LABEL[m] : m < M_SMP ? ROM_LABEL[m - M_ROM]
                                   : IS_SMP(m)   ? "SMP"
+                                  : m == M_USR  ? "USR"
                                   : m == M_MIDI ? "MID"
                                                 : synth_label(m - M_SYNTH);
 }
@@ -69,12 +75,15 @@ int machine_find(const char *name, int otherwise) {
   return otherwise;
 }
 
-int machine_voices(int m) { return IS_SMP(m) ? SAMPLE_COUNT : m >= M_SYNTH ? 128
+int machine_voices(int m) { return IS_SMP(m) ? SAMPLE_COUNT : m >= M_USR ? 128
                                                                            : V_COUNT; }
 
 static int own(int m, int v) {
   if (v < 0 || v >= machine_voices(m)) {
     return 0;
+  }
+  if (m == M_USR) {
+    return 0; /* played from the sample banks; the screen asks sampler_has */
   }
   return m < M_ROM ? PATCH[m][v].kind != K_NONE : m < M_SMP ? ROM[m - M_ROM][v].len > 0
                                                             : 1; /* SMP, the synths */
@@ -109,7 +118,7 @@ const char *voice_name(int m, int v) {
   if (IS_SMP(m)) {
     return SAMPLES[clamp(v, 0, SAMPLE_COUNT - 1)].name;
   }
-  if (m >= M_SYNTH) { /* a note: C#3 */
+  if (m >= M_USR) { /* a note: C#3 */
     static const char *const NOTE[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     static char s[6];
     const char *n = NOTE[clamp(v, 0, 127) % 12];
@@ -350,10 +359,64 @@ static void voice_start(dv_t *v, const track_t *d, int m, int voice, int semis) 
   }
 }
 
+static void usr_start(dv_t *v, const track_t *d, const uint8_t *data, uint32_t len, int idx0, int semis) {
+  v->kind = K_NONE;
+  v->t = 0;
+  v->chk = FULL;
+  v->choke = 0;
+  v->lp1 = v->lp2 = 0;
+  v->p = 0;
+  v->smp = 0;
+  v->rom = data;
+  v->len = len;
+  v->step = tuned(32768u, semis + (d->tune - 64) * 12 / 64); /* recorded at half the output rate */
+  v->idx = idx0;
+  v->pred = v->ia = v->ib = 0;
+  v->dn = 0;
+  v->pos = 0;
+  env_start(v, 0, d->decay < 64 ? SAMPLE_DECAY[d->decay] + 0 : 255);
+  if (d->decay >= 64) {
+    v->coef[0] = 0x7FFFFFFFu;
+  }
+  v->ca = d->tone < 64 ? ONEPOLE[SAMPLE_LP[d->tone]] : 0;
+  v->cb = ONEPOLE[FREQ_SHELF];
+  v->m[0] = d->tone > 64 ? (d->tone - 64) * 64 : 0;
+}
+
 static void drum_hit(int t, int v, int vel) {
   const track_t *d = &song.track[t];
   int m = d->machine < machine_count() ? d->machine : 0, semis;
-  int r = m >= M_SYNTH ? -1 : resolve(m, v, &semis);
+  int r;
+  if (m == M_USR) {
+    const uint8_t *data = 0;
+    uint32_t len = 0;
+    uint8_t idx0 = 0;
+    dv_t *pick;
+    int i;
+    if (!sampler_voice(d->extra & 3, v, &data, &len, &idx0) || !len) {
+      return;
+    }
+    pick = &dv[t][0];
+    for (i = 0; i < POLY; i++) {
+      dv_t *x = &dv[t][i];
+      if (x->on && x->voice == v) {
+        pick = x;
+        break;
+      }
+      if (!x->on && pick->on) {
+        pick = x;
+      } else if (x->on && pick->on && x->t > pick->t) {
+        pick = x;
+      }
+    }
+    usr_start(pick, d, data, len, idx0, 0);
+    pick->gain = d->level * vel * 2;
+    pick->voice = (uint8_t)v;
+    pick->on = 1;
+    hits[t]++;
+    return;
+  }
+  r = m >= M_SYNTH ? -1 : resolve(m, v, &semis);
   if (r < 0) {
     return;
   }
@@ -561,6 +624,9 @@ void drum_envelope(int t, int v, uint8_t *h, int n) {
     h[i] = 0;
   }
   if (r < 0 || n <= 0) {
+    return;
+  }
+  if (m == M_USR) {
     return;
   }
   if (m >= M_ROM) { /* the recording's own peaks */

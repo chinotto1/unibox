@@ -1,24 +1,30 @@
-/* FOMAJAM: a groovebox. It has 9 tracks; each plays its own machine, either a drum machine (808, 909, 707,
- * DMX, ...) with a voice per step, or a synth engine (ANALOG, SUPERSAW, ...) or MIDI out with a note per step.
- * There are 8 patterns of 16 steps.
+/* UNIBOX: a groovebox. It has 9 tracks; each plays its own machine, either a drum machine (808, 909, 707,
+ * DMX, LinnDrum, CR-78, ...) with a voice per step, a sampled instrument, or a synth engine (ANALOG, SH-101,
+ * TB-303, Juno, wavetable, ...) or MIDI out with a note per step. There are 16 patterns of 16 steps.
  *
  * This file is the user interface. Every page has the same three parts: a header (page, track, pattern,
  * tempo), the body, and a knob bar that shows what KNOB1-4 do on that page, always in the same four colors.
  *
- *   SEQ        PATTERN  white keys are steps, black keys pick tracks
- *   EDIT       SOUND    the track's sound (SEL shows the next page of knobs); the keys play
- *   HOME       MIX      levels; white keys mute tracks, black keys pick tracks. HOME again: SCOPE (the output),
- *                       and again MIDI IN (what comes in); the keys play on those
- *   FX         FX       sends, delay, reverb, chorus, ducking, the master filter and distortion; the keys play
- *   GLO        GLOBAL   tempo, swing, length, theme, MIDI clock; the keys play
+ *   SEQ        PATTERN   white keys are steps, black keys pick tracks
+ *   EDIT       SOUND     the track's sound; ALGORITHM or SEL moves the tabs; the keys play
+ *   HOME       MIX       levels; white keys mute tracks, black keys pick tracks
+ *   HOME again PATTERNS  white keys pick a pattern; SAVE + a key copies the current one; two keys chain
+ *   HOME again SCOPE     the output
+ *   HOME again MIDI IN   what comes in; HOME once more returns to MIX
+ *   LFO        SAMPLE    record USB audio into eight slots, then name the instrument with the keys
+ *   FX         FX        sends, delay, reverb, chorus, ducking, the master filter and distortion
+ *   GLO        GLOBAL    tempo, swing, length, theme, MIDI clock
  *   SELECT     picks the track        PRESETS    picks the pattern (it changes at the end of the bar)
- *   ALGORITHM  sets the tempo         PLAY / REC / SAVE / OCT- OCT+
+ *   ALGORITHM  on SOUND, FX and GLOBAL: the next tab; elsewhere the tempo
+ *   PLAY / SAVE / OCT- OCT+
+ *   REC        a short tap: step record. Hold it and play: a free take (up to 64 beats), even if stopped
  *   SEL        the next page of knobs; on PATTERN with a synth, toggles slide on the cursor's step
  *   ENV        clears the pattern after asking (OCT+ answers yes, OCT- no, for every question)
  *   ARP        on PATTERN, sets the cursor's step's ratchet: x1 x2 x3 x4 x6 x8
  *
- * The sound is in engine.c, drums.c and synths.c; the colors are in themes.h. */
+ * The sound is in engine.c, drums.c, synths.c and sampler.c; the colors are in themes.h. */
 #include "groove.h"
+#include "sampler.h"
 #include "themes.h"
 
 /* ---- the layout, the same on every page */
@@ -34,11 +40,14 @@ enum { PG_PATTERN,
        PG_GLOBAL,
        PG_SCOPE, /* HOME again, from MIX */
        PG_MIDI,  /* and again */
+       PG_ORDER, /* patterns, copy and chain: HOME again, before SCOPE */
+       PG_SAMPLE, /* LFO: sample from USB audio */
        PAGES };
-static const char *const PAGE_NAME[PAGES] = {"PATTERN", "SOUND", "MIX", "FX", "GLOBAL", "SCOPE", "MIDI IN"};
-static const uint8_t PAGE_BTN[PAGES] = {BTN_SEQ, BTN_EDIT, BTN_HOME, BTN_FX, BTN_GLO, BTN_HOME, BTN_HOME};
+static const char *const PAGE_NAME[PAGES] = {"PATTERN", "SOUND", "MIX", "FX", "GLOBAL", "SCOPE", "MIDI IN", "PATTERNS", "SAMPLE"};
+static const uint8_t PAGE_BTN[PAGES] = {BTN_SEQ, BTN_EDIT, BTN_HOME, BTN_FX, BTN_GLO, BTN_HOME, BTN_HOME, BTN_HOME, BTN_LFO};
 
-static int page, sub, track, cursor, octave = -1, rec;
+static int page, sub, track, cursor, octave = -1, rec, taking, pasted;
+static int chain_key = -1; /* a white key held on PATTERNS, waiting for a second key to chain */
 static const theme_t *th;
 
 /* ---- the knobs: every value is a parameter with a name, a range and a way to show it */
@@ -89,6 +98,14 @@ enum { P_TUNE,
        P_SE5,
        P_SE6,
        P_SE7,
+       P_SE8,
+       P_SE9,
+       P_SE10,
+       P_SE11,
+       P_SE12,
+       P_SE13,
+       P_SE14,
+       P_SE15,
        P_ATK,
        P_DEC,
        P_SUS,
@@ -121,6 +138,8 @@ enum { P_TUNE,
        P_RESO,
        P_DTYPE,
        P_CCOUT,
+       P_STIME, /* the sampler: tenths of a second, and which bank */
+       P_SBANK,
        P_NONE, /* an empty knob */
        PARAMS };
 static const struct {
@@ -156,6 +175,14 @@ static const struct {
     [P_SE5] = {"", 0, 0, F_ENGINE},
     [P_SE6] = {"", 0, 0, F_ENGINE},
     [P_SE7] = {"", 0, 0, F_ENGINE},
+    [P_SE8] = {"", 0, 0, F_ENGINE},
+    [P_SE9] = {"", 0, 0, F_ENGINE},
+    [P_SE10] = {"", 0, 0, F_ENGINE},
+    [P_SE11] = {"", 0, 0, F_ENGINE},
+    [P_SE12] = {"", 0, 0, F_ENGINE},
+    [P_SE13] = {"", 0, 0, F_ENGINE},
+    [P_SE14] = {"", 0, 0, F_ENGINE},
+    [P_SE15] = {"", 0, 0, F_ENGINE},
     [P_ATK] = {"ATTACK", 0, 127, F_NUM},
     [P_DEC] = {"DECAY", 0, 127, F_NUM},
     [P_SUS] = {"SUSTN", 0, 127, F_NUM},
@@ -188,6 +215,8 @@ static const struct {
     [P_RESO] = {"RESO", 0, 127, F_NUM},
     [P_DTYPE] = {"TYPE", 0, DISTS - 1, F_DIST},
     [P_CCOUT] = {"CC OUT", 0, 1, F_ONOFF},
+    [P_STIME] = {"TIME", 2, 20, F_NUM},
+    [P_SBANK] = {"BANK", 0, SAMP_BANKS - 1, F_NUM},
     [P_NONE] = {"", 0, 0, F_NONE},
 };
 
@@ -197,7 +226,7 @@ static int machine_of(int t) { return song.track[t].machine; }
 static int is_synth(int t) { return machine_synth(machine_of(t)); } /* a synth engine: notes */
 static int engine_of(int t) { return machine_engine(machine_of(t)); }
 
-static int is_se(int id) { return id >= P_SE0 && id <= P_SE7; }
+static int is_se(int id) { return id >= P_SE0 && id <= P_SE15; }
 
 static int phi(int id) { /* a parameter's highest value */
   synth_param_t sp;
@@ -208,6 +237,7 @@ static int phi(int id) { /* a parameter's highest value */
   return id == P_MACHINE                    ? machine_count() - 1
          : id == P_VOICE || id == P_STVOICE ? machine_voices(machine_of(track)) - 1
          : id == P_PRESET                   ? (engine_of(track) >= 0 ? synth_presets(engine_of(track)) - 1 : 0)
+         : id == P_EXTRA && machine_usr(machine_of(track)) ? SAMP_BANKS - 1
          : id == P_FENV                     ? 63
                                             : PARAM[id].hi;
 }
@@ -241,6 +271,9 @@ static const char *pname(int id) {  /* EXTRA is what the voice's original called
     return "GLIDE";
   }
   if (id == P_EXTRA) {
+    if (machine_usr(machine_of(track))) {
+      return "BANK";
+    }
     const char *v = voice_name(machine_of(track), song.track[track].voice);
     return v[0] == 'B' && v[1] == 'D' ? "ATTACK" : v[0] == 'S' && v[1] == 'D' ? "SNAPPY"
                                                                               : "EXTRA";
@@ -250,22 +283,42 @@ static const char *pname(int id) {  /* EXTRA is what the voice's original called
 
 static int is_midi(int t) { return machine_midi(machine_of(t)); }
 
+static int engine_tabs(void) { /* the engine's own tabs, then ENV (unless it has its own), PTCH, PLAY */
+  int e = engine_of(track);
+  if (e < 0) {
+    return 0;
+  }
+  return synth_pages(e) + (synth_ownenv(e) ? 2 : 3);
+}
+
 static int subpages(void) {
   return page == PG_GLOBAL ? 2 : page == PG_FX       ? 4
                              : page != PG_SOUND      ? 1
-                             : engine_of(track) >= 0 ? 5
+                             : engine_of(track) >= 0 ? engine_tabs()
                              : is_midi(track)        ? 3
                                                      : 2;
 }
 
 static const char *subpage_name(int i) { /* the tabs on the SOUND and GLOBAL pages */
-  static const char *const DRUM[2] = {"PLAY", "MORE"}, *const SE[3] = {"ENV", "PATCH", "PLAY"}, *const MIDI[3] = {"NOTE", "CC", "CC#"},
-                           *const GLOBAL[2] = {"TEMPO", "MIDI"}, *const FX[4] = {"SENDS", "SPACE", "MOTION", "MASTER"};
+  static const char *const DRUM[2] = {"PLAY", "MORE"}, *const SE[3] = {"ENV", "PTCH", "PLAY"}, *const TAIL[2] = {"PTCH", "PLAY"},
+                           *const MIDI[3] = {"NOTE", "CC", "CC#"}, *const GLOBAL[2] = {"TEMPO", "MIDI"},
+                           *const FX[4] = {"SENDS", "SPACE", "MOTION", "MASTER"};
   int e = engine_of(track);
-  return page == PG_GLOBAL ? GLOBAL[i & 1] : page == PG_FX ? FX[i & 3]
-                                         : e >= 0          ? (i < 2 ? synth_page(e, i) : SE[i - 2])
-                                         : is_midi(track)  ? MIDI[i % 3]
-                                                           : DRUM[i & 1];
+  if (page == PG_GLOBAL) {
+    return GLOBAL[i & 1];
+  }
+  if (page == PG_FX) {
+    return FX[i & 3];
+  }
+  if (e >= 0) {
+    int n = synth_pages(e);
+    if (i < n) {
+      const char *s = synth_page(e, i);
+      return s ? s : "";
+    }
+    return synth_ownenv(e) ? TAIL[i - n] : SE[i - n];
+  }
+  return is_midi(track) ? MIDI[i % 3] : DRUM[i & 1];
 }
 
 static void pick_knobs(int *k) {
@@ -273,19 +326,39 @@ static void pick_knobs(int *k) {
   static const uint8_t DRUM_PLAY[4] = {P_TUNE, P_DECAY, P_TONE, P_LEVEL};
   static const uint8_t DRUM_MORE[4] = {P_MACHINE, P_VOICE, P_EXTRA, P_SEND};
   static const uint8_t SYN_STEP[4] = {P_STEP, P_STVOICE, P_STACC, P_MACHINE}; /* SLIDE: the SEL button */
-  static const uint8_t SE[5][4] = {{P_SE0, P_SE1, P_SE2, P_SE3}, {P_SE4, P_SE5, P_SE6, P_SE7}, {P_ATK, P_DEC, P_SUS, P_REL}, {P_PRESET, P_FENV, P_LEVEL, P_SEND}, {P_GATE, P_MONO, P_SLIDE, P_TUNE}};
+  static const uint8_t ENV[4] = {P_ATK, P_DEC, P_SUS, P_REL};
+  static const uint8_t PATCH[4] = {P_PRESET, P_FENV, P_LEVEL, P_SEND};
+  static const uint8_t PLAY[4] = {P_GATE, P_MONO, P_SLIDE, P_TUNE};
   static const uint8_t MIX[4] = {P_LEVEL, P_SEND, P_RSEND, P_MUTE};
   static const uint8_t FX[4][4] = {{P_SEND, P_RSEND, P_CSEND, P_DUCK}, {P_DTIME, P_DFDBK, P_RSIZE, P_RDAMP}, {P_CRATE, P_CDEPTH, P_PUMP, P_NONE}, {P_FILTER, P_RESO, P_DRIVE, P_DTYPE}};
   static const uint8_t GLOBAL[2][4] = {{P_BPM, P_SWING, P_LENGTH, P_THEME}, {P_CLOCK, P_CCOUT, P_NONE, P_NONE}};
   static const uint8_t MIDI[3][4] = {{P_MCH, P_PROG, P_GATE, P_VELO}, {P_CC0, P_CC1, P_CC2, P_CC3}, {P_CCN0, P_CCN1, P_CCN2, P_CCN3}};
-  const uint8_t *src = page == PG_MIX || page >= PG_SCOPE          ? MIX
-                       : page == PG_FX                             ? FX[sub & 3]
-                       : page == PG_GLOBAL                         ? GLOBAL[sub & 1]
-                       : is_midi(track) && page == PG_SOUND        ? MIDI[sub % 3]
-                       : engine_of(track) >= 0 && page == PG_SOUND ? SE[sub % 5]
-                       : is_synth(track)                           ? SYN_STEP
-                       : page == PG_PATTERN                        ? DRUM_STEP
-                                                                   : (sub ? DRUM_MORE : DRUM_PLAY);
+  static const uint8_t SAMPLE[4] = {P_STIME, P_SBANK, P_NONE, P_NONE};
+  static const uint8_t NONE[4] = {P_NONE, P_NONE, P_NONE, P_NONE};
+  if (engine_of(track) >= 0 && page == PG_SOUND) {
+    int e = engine_of(track), n = synth_pages(e), own = synth_ownenv(e);
+    if (sub < n) {
+      for (int i = 0; i < 4; i++) {
+        k[i] = P_SE0 + sub * 4 + i;
+      }
+    } else {
+      int s = sub - n;
+      const uint8_t *row = !own ? (s == 0 ? ENV : s == 1 ? PATCH : PLAY) : (s == 0 ? PATCH : PLAY);
+      for (int i = 0; i < 4; i++) {
+        k[i] = row[i];
+      }
+    }
+    return;
+  }
+  const uint8_t *src = page == PG_SAMPLE                             ? SAMPLE
+                       : page == PG_ORDER                             ? NONE
+                       : page == PG_MIX || page == PG_SCOPE || page == PG_MIDI ? MIX
+                       : page == PG_FX                                ? FX[sub & 3]
+                       : page == PG_GLOBAL                            ? GLOBAL[sub & 1]
+                       : is_midi(track) && page == PG_SOUND           ? MIDI[sub % 3]
+                       : is_synth(track)                              ? SYN_STEP
+                       : page == PG_PATTERN                           ? DRUM_STEP
+                                                                      : (sub ? DRUM_MORE : DRUM_PLAY);
   for (int i = 0; i < 4; i++) {
     k[i] = src[i];
   }
@@ -409,6 +482,10 @@ static int pget(int id) {
       return !!(pat()->flag[track][cursor] & STEP_SLIDE);
     case P_MUTE:
       return song.mute >> track & 1;
+    case P_STIME:
+      return sampler_time_ds();
+    case P_SBANK:
+      return sampler_bank();
   }
   return 0;
 }
@@ -454,6 +531,10 @@ static void pset(int id, int v) {
     }
   } else if (id == P_MUTE) {
     flip16(&song.mute, track, v);
+  } else if (id == P_STIME) {
+    sampler_set_time(v);
+  } else if (id == P_SBANK) {
+    sampler_set_bank(v);
   }
 }
 
@@ -462,6 +543,22 @@ static void pformat(int id, int v, char *out) {
   int n;
   if (id == P_DUCK && !track) { /* track 1 is what ducks the others */
     out[0] = 'K', out[1] = 'E', out[2] = 'Y', out[3] = 0;
+    return;
+  }
+  if (id == P_STIME) { /* tenths of a second: 1.0 */
+    out[0] = (char)('0' + v / 10);
+    out[1] = '.';
+    out[2] = (char)('0' + v % 10);
+    out[3] = 0;
+    return;
+  }
+  if (id == P_SBANK) {
+    s = sampler_bank_name(v);
+    n = 0;
+    for (; s[n] && n < 7; n++) {
+      out[n] = s[n];
+    }
+    out[n] = 0;
     return;
   }
   switch (PARAM[id].fmt) {
@@ -603,14 +700,16 @@ static uint32_t toast_until;
 
 static void draw_transport(void) {
   char s[12];
+  int chained = song.chain_a != song.chain_b;
+  int shown = chained && playing ? cur_pattern : song.pattern;
   int queued = playing && cur_pattern != song.pattern;
   rect(166, 0, 74, HEAD_H, th->panel);
   s[0] = 'P';
-  format_int(s + 1, song.pattern + 1);
-  text(168, 4, s, queued ? th->accent : th->dim, FONT_SMALL);
+  format_int(s + 1, shown + 1);
+  text(168, 4, s, queued || chained ? th->accent : th->dim, FONT_SMALL);
   format_int(s, song.bpm);
   text(218 - text_width(s, FONT_SMALL), 4, s, th->text, FONT_SMALL);
-  uint16_t c = rec ? RGB(255, 60, 60) : th->text;
+  uint16_t c = rec || taking || sampler_recording() ? RGB(255, 60, 60) : th->text;
   if (playing) {
     for (int i = 0; i < 6; i++) {
       rect(224 + i, 6 + i, 1, 13 - 2 * i, c);
@@ -767,11 +866,12 @@ static void draw_row(int t) {
 }
 
 /* ---- SOUND: the track's name, its decay drawn, and what both knob pages hold */
-static void draw_tabs(void) { /* a page's pages of knobs, as tabs: SEL moves on */
-  int n = subpages(), w = 232 / n;
+static void draw_tabs(void) { /* a page's pages of knobs, as tabs: SEL or ALGORITHM moves on */
+  int n = subpages(), w = n ? SCREEN_W / n : SCREEN_W;
   for (int i = 0; i < n; i++) {
-    rect(4 + i * w, 160, w - 4, 20, i == sub ? th->accent : th->panel);
-    text_center(4 + i * w, w - 4, 162, subpage_name(i), i == sub ? th->bg : th->dim, FONT_SMALL);
+    int x = i * w;
+    rect(x, 160, w - 2, 20, i == sub ? th->accent : th->panel);
+    text_center(x, w - 2, 162, subpage_name(i), i == sub ? th->bg : th->dim, FONT_SMALL);
   }
 }
 
@@ -794,6 +894,11 @@ static void draw_sound(void) {
     uint16_t c = th->track[track];
     text(8, 30, machine_name(machine_of(track)), c, FONT_BIG);
     text(8, 62 - 12 + 4, synth_preset_name(engine_of(track), d->preset), th->text, FONT_SMALL);
+    if (synth_ownenv(engine_of(track))) {
+      text(8, 100, "INTERNAL ENV", th->dim, FONT_SMALL);
+      draw_tabs();
+      return;
+    }
     int x = 8, w = d->atk * 56 / 127 + 1, y0 = 140, top = 76, sus = y0 - d->sus * (y0 - top) / 127;
     for (int i = 0; i < w; i++, x++) { /* attack */
       int h = (y0 - top) * (i + 1) / w;
@@ -811,6 +916,10 @@ static void draw_sound(void) {
       int y = sus + (y0 - sus) * (i + 1) / w;
       rect(x, y, 1, y0 - y + 1, c);
     }
+  } else if (machine_usr(machine_of(track))) {
+    text(8, 30, "USER", th->track[track], FONT_BIG);
+    text(8, 72, sampler_bank_name(song.track[track].extra & 3), th->text, FONT_BIG);
+    text(8, 116, "NOTES FROM F3", th->dim, FONT_SMALL);
   } else { /* the machine, the voice, and how it rings */
     uint8_t h[224];
     int v = song.track[track].voice, x = text(8, 30, machine_name(machine_of(track)), th->track[track], FONT_BIG);
@@ -1079,6 +1188,63 @@ static void draw_global(void) {
   draw_cpu();
 }
 
+static void draw_order(void) { /* 16 patterns; the chain is the marked run, the playing one is underlined */
+  int a = song.chain_a, b = song.chain_b;
+  rect(0, BODY_Y, SCREEN_W, BODY_H, th->bg);
+  if (a > b) {
+    int t = a;
+    a = b;
+    b = t;
+  }
+  for (int i = 0; i < PATTERNS; i++) {
+    int col = i & 3, row = i >> 2, x = 6 + col * 58, y = 30 + row * 32;
+    int in = song.chain_a != song.chain_b && i >= a && i <= b;
+    int cur = i == song.pattern;
+    char s[8];
+    rect(x, y, 54, 28, cur ? th->accent : in ? th->panel : th->off);
+    format_int(s, i + 1);
+    text_center(x, 54, y + 6, s, cur ? th->bg : th->text, FONT_SMALL);
+    if (playing && i == cur_pattern) {
+      rect(x + 6, y + 22, 42, 3, cur ? th->bg : th->accent);
+    }
+  }
+  text(8, 162, "SAVE+KEY COPY", th->dim, FONT_SMALL);
+  text(130, 162, "2 KEYS CHAIN", th->dim, FONT_SMALL);
+}
+
+static void draw_sample(void) {
+  int b = sampler_bank(), armed = sampler_slot(), recn = sampler_recording();
+  rect(0, BODY_Y, SCREEN_W, BODY_H, th->bg);
+  if (sampler_naming()) {
+    text(8, 36, "NAME", th->dim, FONT_SMALL);
+    text(8, 58, sampler_name_buf(), th->accent, FONT_BIG);
+    text(8, 110, "WHITE A-P", th->text, FONT_SMALL);
+    text(8, 128, "BLACK Q-Z SPACE", th->text, FONT_SMALL);
+    text(8, 150, "OCT- DEL   SAVE OK", th->dim, FONT_SMALL);
+    return;
+  }
+  text(8, 28, sampler_bank_name(b), th->accent, FONT_BIG);
+  if (usb_audio_active()) {
+    text(140, 40, "USB", th->text, FONT_SMALL);
+  }
+  for (int i = 0; i < SAMP_SLOTS; i++) {
+    int col = i & 3, row = i >> 2, x = 6 + col * 58, y = 68 + row * 36;
+    int note = sampler_slot_note(b, i);
+    int hot = i == armed;
+    char s[8];
+    rect(x, y, 54, 32, hot ? (recn ? RGB(255, 60, 60) : th->accent) : note >= 0 ? th->panel : th->off);
+    if (note >= 0) {
+      note_name(note, s);
+    } else {
+      s[0] = '-', s[1] = '-', s[2] = 0;
+    }
+    text_center(x, 54, y + 8, s, hot ? th->bg : th->text, FONT_SMALL);
+  }
+  int vu = sampler_vu();
+  rect(8, 148, 224, 8, th->off);
+  rect(8, 148, vu * 224 / 255, 8, th->accent);
+}
+
 static void draw_body(void) {
   playhead_drawn = -1;
   rect(0, HEAD_H, SCREEN_W, KNOB_Y - HEAD_H, th->bg);
@@ -1098,6 +1264,10 @@ static void draw_body(void) {
     draw_scope(1);
   } else if (page == PG_MIDI) {
     draw_midi(1);
+  } else if (page == PG_ORDER) {
+    draw_order();
+  } else if (page == PG_SAMPLE) {
+    draw_sample();
   } else {
     draw_global();
   }
@@ -1127,6 +1297,7 @@ static void set_page(int p) {
   if (p != page) {
     page = p;
     sub = 0;
+    chain_key = -1;
     draw_all();
   }
 }
@@ -1178,6 +1349,9 @@ static void changed(int id) { /* a parameter changed: show it where it shows (an
   }
   if (id == P_BPM) {
     draw_transport();
+  }
+  if ((id == P_STIME || id == P_SBANK) && page == PG_SAMPLE) {
+    draw_sample();
   }
   if (id == P_MACHINE || id == P_VOICE || id == P_STVOICE) {
     draw_track_chip();
@@ -1237,9 +1411,13 @@ static void turn(int id, int e) {
   if (id == P_VOICE || id == P_STVOICE) {                                            /* one voice a detent, past the ones this machine has none of */
     int m = machine_of(track), n = v < 0 && d > 0 ? song.track[track].voice - 1 : v; /* from a rest: the track's voice */
     lo = id == P_STVOICE ? -1 : 0;
-    do {
-      n += d > 0 ? 1 : -1;
-    } while (n >= 0 && n <= hi && !machine_has(m, n));
+    if (machine_usr(m)) { /* every note is a slot; empty ones are silent, not skipped */
+      n = v + (d > 0 ? 1 : -1);
+    } else {
+      do {
+        n += d > 0 ? 1 : -1;
+      } while (n >= 0 && n <= hi && !machine_has(m, n));
+    }
     if (n >= lo && n <= hi && n != v) {
       pset(id, n);
       changed(id);
@@ -1264,7 +1442,7 @@ static int8_t white_of[KEY_COUNT], black_of[KEY_COUNT];
 /* with REC: into the step playing, or (stopped) into the cursor's, which then moves on */
 static void record(int t, int v, int vel) {
   int s = playing ? play_step : cursor;
-  if (!rec || s < 0) {
+  if (taking || !rec || s < 0) {
     return;
   }
   pat()->val[t][s] = (uint8_t)v;
@@ -1356,23 +1534,156 @@ static void keys_mix(void) {
   }
 }
 
+/* a free take: notes while REC is held, timed from the first one. Drums are hits; keyed instruments stay open */
+#define TAKE_MAX 192
+typedef struct {
+  uint8_t track, note, vel, open;
+  uint16_t on_ms, dur;
+} take_ev_t;
+static take_ev_t take_ev[TAKE_MAX];
+static int take_n;
+static uint32_t take_t0, rec_down;
+
+static void take_note_on(int t, int note, int vel) {
+  uint32_t ms;
+  if (!taking || take_n >= TAKE_MAX) {
+    return;
+  }
+  if (!take_n) {
+    take_t0 = millis();
+  }
+  ms = millis() - take_t0;
+  if (ms > 65000u) {
+    return;
+  }
+  take_ev[take_n].track = (uint8_t)t;
+  take_ev[take_n].note = (uint8_t)note;
+  take_ev[take_n].vel = (uint8_t)vel;
+  take_ev[take_n].on_ms = (uint16_t)ms;
+  take_ev[take_n].dur = 1;
+  take_ev[take_n].open = 1;
+  take_n++;
+}
+
+static void take_note_off(int t, int note) {
+  uint32_t ms, d;
+  int i;
+  if (!taking || !take_n) {
+    return;
+  }
+  ms = millis() - take_t0;
+  if (ms > 65000u) {
+    ms = 65000u;
+  }
+  for (i = take_n - 1; i >= 0; i--) {
+    if (take_ev[i].open && take_ev[i].track == t && take_ev[i].note == note) {
+      d = ms - take_ev[i].on_ms;
+      take_ev[i].dur = (uint16_t)(d ? d : 1);
+      take_ev[i].open = 0;
+      return;
+    }
+  }
+}
+
+static int keyed_track(int t) { return is_synth(t) || machine_usr(machine_of(t)); }
+
 static void keys_play(void) {
   static uint8_t held[KEY_COUNT], held_t[KEY_COUNT];
   int base = KEY_FIRST_NOTE + 12 * octave;
+  int keyed = keyed_track(track);
   for (int k = 0; k < KEY_COUNT; k++) {
     if (key_pressed(k)) {
-      if (is_synth(track)) {
+      if (keyed) {
         held[k] = (uint8_t)(base + k); /* a key stops the note it started, whatever the octave or track is now */
         held_t[k] = (uint8_t)track;
+        if (taking) {
+          take_note_on(track, held[k], 100);
+        }
         play(track, held[k], 100);
       } else if (key_voice(track, k) >= 0) {
-        play(track, key_voice(track, k), 100);
+        int v = key_voice(track, k);
+        if (taking) {
+          take_note_on(track, v, 100);
+          take_note_off(track, v); /* a drum hit, not a held note */
+        }
+        play(track, v, 100);
       }
     }
     if (key_released(k) && held[k]) {
+      if (taking) {
+        take_note_off(held_t[k], held[k]);
+      }
       live_off(held_t[k], held[k]);
       held[k] = 0;
     }
+  }
+}
+
+static void set_pattern(int pt);
+
+static int white_held(int w) {
+  uint32_t held = keys();
+  for (int k = 0; k < KEY_COUNT; k++) {
+    if (white_of[k] == w && (held >> k & 1u)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void keys_order(void) {
+  for (int k = 0; k < KEY_COUNT; k++) {
+    int w = white_of[k];
+    if (w < 0 || w >= PATTERNS) {
+      continue;
+    }
+    if (key_pressed(k)) {
+      if (button_held(BTN_SAVE)) {
+        if (w != song.pattern) {
+          song.pat[w] = song.pat[song.pattern];
+          pasted = 1;
+          save_pending = 0;
+          dirty = 1;
+          toast("COPIED");
+          draw_order();
+        }
+      } else if (chain_key >= 0 && chain_key != w && white_held(chain_key)) {
+        song.chain_a = (uint8_t)(chain_key < w ? chain_key : w);
+        song.chain_b = (uint8_t)(chain_key < w ? w : chain_key);
+        dirty = 1;
+        toast("CHAIN");
+        draw_order();
+        draw_transport();
+      } else {
+        chain_key = (int8_t)w;
+        set_pattern(w);
+      }
+    }
+    if (key_released(k) && chain_key == w) {
+      chain_key = -1;
+    }
+  }
+}
+
+static void keys_sample(void) {
+  static const char LETTER[] = "QRSTUVWXYZ ";
+  if (!sampler_naming()) {
+    keys_play();
+    return;
+  }
+  for (int k = 0; k < KEY_COUNT; k++) {
+    int w, b;
+    if (!key_pressed(k)) {
+      continue;
+    }
+    w = white_of[k];
+    b = black_of[k];
+    if (w >= 0 && w < 16) {
+      sampler_name_char('A' + w);
+    } else if (b >= 0 && b < 11) {
+      sampler_name_char(LETTER[b]);
+    }
+    draw_sample();
   }
 }
 
@@ -1406,7 +1717,8 @@ static void set_pattern(int pt) {
     format_int(s + 8, pt + 1);
     toast(s);
     dirty = 1;
-    if (page == PG_PATTERN) {
+    draw_transport();
+    if (page == PG_PATTERN || page == PG_ORDER) {
       draw_body();
     }
     draw_knobs();
@@ -1581,10 +1893,16 @@ static void midi_in(void) {
     if (t < 0) {
       continue;
     }
-    if (is_synth(t)) {
+    if (is_synth(t) || machine_usr(machine_of(t))) {
       if (on) {
+        if (taking) {
+          take_note_on(t, d1, d2);
+        }
         play(t, d1, d2);
       } else if (off) {
+        if (taking) {
+          take_note_off(t, d1);
+        }
         live_off(t, d1);
       }
     } else if (on) {
@@ -1593,6 +1911,10 @@ static void midi_in(void) {
         v = d1 - 36; /* SMP: a sample a key from C */
       }
       if (v >= 0 && machine_has(machine_of(t), v)) {
+        if (taking) {
+          take_note_on(t, v, d2);
+          take_note_off(t, v);
+        }
         play(t, v, d2);
       }
     }
@@ -1698,9 +2020,15 @@ static void sanitize(void) {
     }
   }
   song.pattern &= PATTERNS - 1;
+  if (song.chain_a >= PATTERNS) {
+    song.chain_a = 0;
+  }
+  if (song.chain_b >= PATTERNS) {
+    song.chain_b = song.chain_a;
+  }
   for (int t = 0; t < TRACKS; t++) { /* a synth engine's own */
     if (engine_of(t) >= 0) {
-      for (int k = 0; k < 8; k++) {
+      for (int k = 0; k < ENGINE_PARAMS; k++) {
         synth_param_t sp;
         int8_t *e = &song.track[t].e[k];
         synth_param(t, k, &sp);
@@ -1736,6 +2064,7 @@ void setup(void) {
     }
   }
   sanitize();
+  sampler_init();
   engine_tempo();
   draw_all();
 }
@@ -1766,10 +2095,153 @@ static void leds(void) {
   led_button(BTN_ARP, page == PG_PATTERN && (pat()->flag[track][cursor] & (STEP_ON | STEP_RAT)) > STEP_ON);
   led_button(BTN_SEL, page == PG_PATTERN ? is_synth(track) && pget(P_STSLIDE) : subpages() > 1);
   led_button(BTN_PLAY, playing && (play_step & 3) != 3);
-  led_button(BTN_REC, rec);
+  led_button(BTN_REC, rec || taking || sampler_recording());
   led_button(BTN_SAVE, dirty);
   led_button(BTN_OCT_DOWN, ask_until ? 1 : octave < 0); /* both lit: they answer */
   led_button(BTN_OCT_UP, ask_until ? 1 : octave > 0);
+}
+
+static int take_bars(uint32_t ms, int room, int target, int *bpm_out) {
+  static const int CAND[5] = {1, 2, 4, 8, 16};
+  int best = 1, best_bpm = target, best_err = 100000, c;
+  if (room < 1) {
+    room = 1;
+  }
+  if (ms < 1u) {
+    ms = 1u;
+  }
+  for (c = 0; c < 5; c++) {
+    int b = CAND[c], bp, err;
+    if (b > room) {
+      continue;
+    }
+    bp = (int)((uint32_t)b * 4u * 60000u / ms);
+    if (bp < 40) {
+      bp = 40;
+    }
+    if (bp > 250) {
+      bp = 250;
+    }
+    err = bp - target;
+    if (err < 0) {
+      err = -err;
+    }
+    if (err < best_err) {
+      best_err = err;
+      best = b;
+      best_bpm = bp;
+    }
+  }
+  *bpm_out = best_bpm;
+  return best;
+}
+
+static void commit_take(void) { /* the held performance, onto 16ths, across as many patterns as it needs */
+  static const int CAND[5] = {1, 2, 4, 8, 16};
+  uint32_t end = 1, step_ms;
+  uint16_t used = 0;
+  int bars, bpm, room, i;
+  char msg[16];
+  for (i = 0; i < take_n; i++) {
+    uint32_t d = take_ev[i].open ? millis() - take_t0 - take_ev[i].on_ms : take_ev[i].dur;
+    uint32_t e;
+    if (d > 65000u) {
+      d = 65000u;
+    }
+    if (take_ev[i].open) {
+      take_ev[i].dur = (uint16_t)(d ? d : 1);
+      take_ev[i].open = 0;
+    }
+    e = (uint32_t)take_ev[i].on_ms + take_ev[i].dur;
+    if (e > end) {
+      end = e;
+    }
+    used = (uint16_t)(used | (1u << take_ev[i].track));
+  }
+  room = PATTERNS - song.pattern;
+  bpm = song.bpm < 40 ? 40 : song.bpm;
+  if (!playing) {
+    bars = take_bars(end, room, bpm, &bpm);
+    song.bpm = (uint8_t)bpm;
+    engine_tempo();
+  } else {
+    uint32_t grid = 60000u / (uint32_t)bpm / 4u, steps;
+    int snapped = 1, need;
+    if (!grid) {
+      grid = 1;
+    }
+    steps = (end + grid - 1u) / grid;
+    need = (int)((steps + 15u) / 16u);
+    if (need < 1) {
+      need = 1;
+    }
+    for (i = 0; i < 5; i++) {
+      if (CAND[i] <= room) {
+        snapped = CAND[i];
+      }
+      if (CAND[i] >= need && CAND[i] <= room) {
+        snapped = CAND[i];
+        break;
+      }
+    }
+    bars = snapped;
+  }
+  song.take_bpm = (uint8_t)bpm;
+  step_ms = 60000u / (uint32_t)bpm / 4u;
+  if (!step_ms) {
+    step_ms = 1;
+  }
+  for (i = 0; i < bars && song.pattern + i < PATTERNS; i++) {
+    int pi = song.pattern + i, t, s;
+    for (t = 0; t < TRACKS; t++) {
+      if (!(used & (1u << t))) {
+        continue;
+      }
+      for (s = 0; s < STEPS; s++) {
+        song.pat[pi].flag[t][s] = 0;
+        song.pat[pi].val[t][s] = 0;
+      }
+    }
+  }
+  for (i = 0; i < take_n; i++) {
+    uint32_t step = (take_ev[i].on_ms + step_ms / 2u) / step_ms;
+    int pi, si, tr;
+    if (step >= (uint32_t)bars * STEPS) {
+      step = (uint32_t)bars * STEPS - 1u;
+    }
+    pi = song.pattern + (int)(step / STEPS);
+    si = (int)(step % STEPS);
+    tr = take_ev[i].track;
+    if (pi >= PATTERNS || tr >= TRACKS) {
+      continue;
+    }
+    song.pat[pi].val[tr][si] = take_ev[i].note;
+    song.pat[pi].flag[tr][si] = (uint8_t)(STEP_ON | (take_ev[i].vel > 110 ? STEP_ACC : 0) | (take_ev[i].dur > step_ms ? STEP_SLIDE : 0));
+    song.track[tr].voice = take_ev[i].note;
+  }
+  song.chain_a = song.pattern;
+  song.chain_b = (uint8_t)(song.pattern + bars - 1);
+  dirty = 1;
+  format_int(msg, bpm);
+  i = 0;
+  while (msg[i]) {
+    i++;
+  }
+  msg[i++] = ' ';
+  format_int(msg + i, bars);
+  while (msg[i]) {
+    i++;
+  }
+  msg[i++] = 'B';
+  msg[i++] = 'A';
+  msg[i++] = 'R';
+  msg[i] = 0;
+  toast(msg);
+  draw_transport();
+  if (page == PG_PATTERN || page == PG_ORDER) {
+    draw_body();
+  }
+  draw_knobs();
 }
 
 void loop(void) {
@@ -1785,9 +2257,11 @@ void loop(void) {
   if (button_pressed(BTN_EDIT)) {
     set_page(PG_SOUND);
   }
-  if (button_pressed(BTN_HOME)) { /* MIX, then SCOPE, then MIDI IN, then MIX */
-    set_page(page == PG_MIX ? PG_SCOPE : page == PG_SCOPE ? PG_MIDI
-                                                          : PG_MIX);
+  if (button_pressed(BTN_HOME)) { /* MIX, PATTERNS, SCOPE, MIDI IN, then MIX */
+    set_page(page == PG_MIX ? PG_ORDER : page == PG_ORDER ? PG_SCOPE : page == PG_SCOPE ? PG_MIDI : PG_MIX);
+  }
+  if (button_pressed(BTN_LFO)) {
+    set_page(PG_SAMPLE);
   }
   if (button_pressed(BTN_FX)) {
     set_page(PG_FX);
@@ -1855,20 +2329,46 @@ void loop(void) {
     set_playing(!playing);
   }
   if (button_pressed(BTN_REC)) {
-    rec = !rec;
-    toast(rec ? "REC ON" : "REC OFF");
-    draw_transport();
+    if (page == PG_SAMPLE && !sampler_naming()) {
+      if (!sampler_recording()) {
+        if (sampler_armed() == 0) {
+          toast("ERASING");
+        }
+        toast(sampler_start() ? "RECORDING" : "NO ROOM");
+        draw_sample();
+      }
+      draw_transport();
+    } else if (!taking) {
+      taking = 1;
+      take_n = 0;
+      rec_down = now;
+      draw_transport();
+    }
   }
   if (button_pressed(BTN_SAVE)) {
-    if (playing) {
+    if (page == PG_SAMPLE) {
+      if (sampler_naming()) {
+        sampler_name_save();
+        toast("NAMED");
+      } else {
+        sampler_begin_name();
+      }
+      draw_sample();
+    } else if (playing) {
+      pasted = 0;
       save_pending = 1;
       toast("SAVE ON STOP");
     } else {
+      pasted = 0;
       save_pending = 1;
-      stopped_at = now - 1000;
     }
   }
-  int oct = ask_until || answered ? octave : octave + button_pressed(BTN_OCT_UP) - button_pressed(BTN_OCT_DOWN);
+  if (page == PG_SAMPLE && sampler_naming() && !ask_until && button_pressed(BTN_OCT_DOWN)) {
+    sampler_name_back();
+    draw_sample();
+  }
+  int naming = page == PG_SAMPLE && sampler_naming();
+  int oct = ask_until || answered || naming ? octave : octave + button_pressed(BTN_OCT_UP) - button_pressed(BTN_OCT_DOWN);
   if (oct != octave && oct >= -3 && oct <= 2) {
     char s[16] = "OCTAVE ";
     octave = oct;
@@ -1881,24 +2381,71 @@ void loop(void) {
   set_track(t < 0 ? 0 : t >= TRACKS ? TRACKS - 1
                                     : t);
   set_pattern(song.pattern + encoder(ENC_PRESETS));
-  turn(P_BPM, ENC_ALGORITHM);
+  if (page == PG_SOUND || page == PG_FX || page == PG_GLOBAL) {
+    int d = encoder(ENC_ALGORITHM), n = subpages();
+    if (d && n > 1) {
+      sub = (sub + (d > 0 ? 1 : n - 1)) % n;
+      draw_knobs();
+      if (page == PG_SOUND) {
+        draw_sound();
+      } else if (page == PG_GLOBAL) {
+        draw_global();
+      } else {
+        draw_fx();
+      }
+    }
+  } else {
+    turn(P_BPM, ENC_ALGORITHM);
+  }
   for (int k = 0; k < 4; k++) {
     turn(knobs[k], ENC_KNOB1 + k);
   }
 
   /* the keys and MIDI */
-  if (page == PG_PATTERN && !rec) {
+  if (page == PG_PATTERN && !rec && !taking) {
     keys_pattern();
   } else if (page == PG_MIX) {
     keys_mix();
+  } else if (page == PG_ORDER) {
+    keys_order();
+  } else if (page == PG_SAMPLE) {
+    keys_sample();
   } else {
     keys_play();
   }
   midi_in();
+  if (taking && button_released(BTN_REC)) {
+    uint32_t held_ms = now - rec_down;
+    taking = 0;
+    if (take_n > 0) {
+      commit_take();
+    } else if (held_ms < 300) {
+      rec = !rec;
+      toast(rec ? "REC ON" : "REC OFF");
+      draw_transport();
+    } else {
+      draw_transport();
+    }
+  }
+  {
+    char msg[16];
+    if (sampler_flush(msg)) {
+      toast(msg);
+      if (page == PG_SAMPLE) {
+        draw_sample();
+      }
+    }
+  }
   if (page == PG_SCOPE) {
     draw_scope(0);
   } else if (page == PG_MIDI) {
     draw_midi(0);
+  } else if (page == PG_SAMPLE) {
+    static uint32_t sample_at;
+    if (now - sample_at > 50) {
+      sample_at = now;
+      draw_sample();
+    }
   }
 
   /* what the sound side did */
@@ -1939,10 +2486,13 @@ void loop(void) {
   }
 
   /* saving stalls the sound: only when stopped and quiet */
-  if (save_pending && !playing && now - stopped_at > 600) {
+  if (save_pending && !playing && !button_held(BTN_SAVE) && now - stopped_at > 600) {
     save_pending = 0;
-    toast(settings_save(&song, sizeof song) ? "SAVE FAILED" : "SAVED");
-    dirty = 0;
+    if (!pasted) {
+      toast(settings_save(&song, sizeof song) ? "SAVE FAILED" : "SAVED");
+      dirty = 0;
+    }
+    pasted = 0;
   }
   leds();
 }

@@ -51,7 +51,7 @@ CFLAGS = ["-Os", "-ffunction-sections", "-fno-builtin", "-Wall", "-Wno-unused-fu
 FPU = ["-mcpu=r3", "-mfprev1", "-ffp-contract=off"]
 # the DSP-heavy units are built at -O2
 O2_UNITS = {"bass303.c"}  # (-O2 makes clang call __udivdi3 for the 64-bit divisions in the Felucca engines; -Os expands them)
-INCLUDES = ["-Iplatform", "-Iplatform/hal", "-Iplatform/src", "-Iplatform/gen", "-Ibuild/gen", "-Ivendor/felucca-engines/src", "-Ivendor/felucca"]
+INCLUDES = ["-Iplatform", "-Iplatform/hal", "-Iplatform/src", "-Iplatform/gen", "-Ibuild/gen", "-Isrc/dsp", "-Isrc/fm106", "-Ivendor/felucca-engines/src", "-Ivendor/felucca"]
 LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
 
 

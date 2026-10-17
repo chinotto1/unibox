@@ -35,6 +35,14 @@ enum { P_ATK,
        P_E5,
        P_E6,
        P_E7,
+       P_E8,
+       P_E9,
+       P_E10,
+       P_E11,
+       P_E12,
+       P_E13,
+       P_E14,
+       P_E15,
        P_COUNT };
 typedef struct track {
   int16_t p[P_COUNT];
@@ -61,21 +69,38 @@ static uint32_t rng(void) { return random32(); }
 #include "eng_wheel.c"
 #include "eng_string.h"
 #include "eng_supersaw.h"
+#include "eng_sh101.h"
+#include "eng_303.h"
+#include "eng_juno.h"
+#include "eng_wt.h"
 
-static const engine_t *const ENGINES[] = {&ENG_ANALOG, &ENG_LOFI, &ENG_TRIO, &ENG_WHEEL, &ENG_NOISE, &ENG_PHASE, &ENG_FORMANT, &ENG_PHYS, &ENG_STRING, &ENG_SUPERSAW};
-static const char *const LABEL[] = {"ANA", "LOF", "TRI", "WHL", "NOI", "PHS", "VOX", "PHY", "STR", "SSW"};
+static const engine_t *const ENGINES[] = {&ENG_ANALOG, &ENG_LOFI, &ENG_TRIO, &ENG_WHEEL, &ENG_NOISE, &ENG_PHASE, &ENG_FORMANT, &ENG_PHYS, &ENG_STRING, &ENG_SUPERSAW, &ENG_SH101, &ENG_303, &ENG_JUNO, &ENG_WT};
+static const char *const LABEL[] = {"ANA", "LOF", "TRI", "WHL", "NOI", "PHS", "VOX", "PHY", "STR", "SSW", "SH", "303", "JNO", "WAV"};
 #define ENGINES_N ((int)NELEM(ENGINES))
 
 /* ---- for the screen */
 int synth_count(void) { return ENGINES_N; }
 const char *synth_name(int e) { return ENGINES[e]->name; }
 const char *synth_label(int e) { return LABEL[e]; }
-const char *synth_page(int e, int page) { return ENGINES[e]->page_title[page & 1]; }
+const char *synth_page(int e, int page) {
+  if (page < 0 || page >= FE_NPAGES) {
+    return 0;
+  }
+  return ENGINES[e]->page_title[page];
+}
+int synth_pages(int e) {
+  int n = 0;
+  while (n < FE_NPAGES && ENGINES[e]->page_title[n]) {
+    n++;
+  }
+  return n > 0 ? n : 1;
+}
+int synth_ownenv(int e) { return ENGINES[e]->ownenv; }
 int synth_presets(int e) { return ENGINES[e]->npresets; }
 const char *synth_preset_name(int e, int p) { return ENGINES[e]->presets[p].name; }
 
 static void params(track_t *T, const song_track_t *s) { /* song.track -> Felucca's p[] */
-  for (int k = 0; k < 8; k++) {
+  for (int k = 0; k < ENGINE_PARAMS; k++) {
     T->p[P_E0 + k] = s->e[k];
   }
   T->p[P_ATK] = s->atk;
@@ -105,6 +130,13 @@ void synth_param(int t, int k, synth_param_t *out) {
   out->fmt = d->fmt == F_ENUM && d->names ? SF_ENUM : d->fmt == F_PCT ? SF_PCT
                                                   : d->fmt == F_SEMI  ? SF_SEMI
                                                                       : SF_NUM;
+  if (d->fmt == F_ONOFF) {
+    static const char *const OFFON[] = {"OFF", "ON"};
+    out->fmt = SF_ENUM;
+    out->names = OFFON;
+    out->lo = 0;
+    out->hi = 1;
+  }
 }
 
 void synth_load(int t, int p) {
@@ -114,7 +146,7 @@ void synth_load(int t, int p) {
     return;
   }
   const preset_t *pr = &ENGINES[e]->presets[p];
-  for (int k = 0; k < 8; k++) {
+  for (int k = 0; k < ENGINE_PARAMS; k++) {
     s->e[k] = pr->e[k];
   }
   s->atk = pr->env[0];
@@ -201,6 +233,21 @@ void synths_note(int t, int note, int vel, int slide, int32_t gate) {
   const engine_t *E = ENGINES[e];
   track_t *T = &trk[t];
   params(T, s);
+  if (E->ownenv) { /* the engine keeps its own envelope and glide (the 303): every note reaches it */
+    voice_t *v = &T->v[0];
+    v->gstep = slide;
+    if (!v->active) {
+      make_room();
+    }
+    voice_on(T, E, v, note, vel);
+    gate_left[t][0] = gate;
+    for (int i = 1; i < NVOICE; i++) {
+      release(&T->v[i]);
+      gate_left[t][i] = 0;
+    }
+    hits[t]++;
+    return;
+  }
   if (gate == -2 && !s->mono) { /* tied: the note held from the last step goes now (its release under this one's
                                  * attack); MONO: it is held on into this one, legato (no new attack) */
     for (int i = 0; i < NVOICE; i++) {
@@ -339,6 +386,27 @@ void synths_render(int t, int32_t *out, uint32_t n) {
       release(v);
     }
     int dying = v->stage == 4;
+    if (E->ownenv) { /* amplitude, filter and glide are the engine's; the host only supplies the pitch */
+      vmod_t m;
+      m.pitch16 = clamp(v->pitch_cur + tune, 0, 2047);
+      m.inc = pitch_inc((uint32_t)m.pitch16);
+      m.fine = 0;
+      m.amp0 = m.amp1 = 32767;
+      m.envq15 = 0;
+      m.cutoff = 0;
+      m.shape = 64 << 8;
+      if (dying || (!v->gate && E->done && E->done(T, v))) {
+        v->active = 0;
+        v->stage = 0;
+        continue;
+      }
+      E->render(T, v, buf, n, &m);
+      if (dying) {
+        v->active = 0;
+        v->stage = 0;
+      }
+      continue;
+    }
     int32_t a = env_tick(T, v);
     if (E->amp) {
       a = E->amp(T, v, a);

@@ -1,18 +1,19 @@
-# FOMAJAM
+# UNIBOX
 
-A groovebox firmware for the M-VAVE FM-1, made with [foma](https://github.com/konsumer/foma).
+A groovebox firmware for the M-VAVE FM-1. It starts from [FomaJam](https://github.com/konsumer/fomajam) and adds synths, a step-pattern arranger, free recording, and a USB sampler.
 
 - 9 tracks, each playing its own machine:
   - **drum machines:** modeled 808, 909, SDS-V and CR-78; the 707, 606, DMX, LinnDrum, 505, DR-55, SK-1, KPR-77 and
-    Rhythm Ace from recordings of their ROMs; or your own samples
-  - **synths:** [Felucca](https://github.com/hugelton/Felucca)'s engines (ANALOG, LOFI, TRIO, WHEEL, NOISE, PHASE,
-    VOICE, PHYS), plus STRING (Karplus-Strong) and SUPERSAW (JP-8000 style), all with presets
+    Rhythm Ace from recordings of their ROMs
+  - **USER:** four instruments sampled from USB audio (an iPad, or the emulator's microphone)
+  - **synths:** Felucca's engines, STRING, SUPERSAW, plus an SH-101 style analog synth, the TB-303 from X0X, a Juno-106 style synth from FM-106, and a wavetable synth
   - **MIDI out**, to sequence other gear
-- 8 patterns of 16 steps, with accents, slides and ratchets
+- 16 patterns of 16 steps, with accents, slides, ratchets, copy, and chaining
+- a free take of up to 64 beats: hold REC and play, stopped or not, and it finds a tempo
 - effects: delay, reverb and chorus sends, kick ducking, a master filter and 11 kinds of distortion
-- MIDI clock, and color themes
+- a browser emulator and a Web MIDI installer (Chrome or Edge)
 
-Try it in your browser, and install it on the FM-1 from Chrome or Edge: <https://konsumer.github.io/fomajam/>
+Install from the page this project builds (`web/`), with the FM-1 plugged in over USB.
 
 ## Playing it
 
@@ -22,10 +23,10 @@ bar**. The knob bar shows what KNOB1–4 do on the current page, always in the s
 | Control     | What it does                                                                         |
 | ----------- | ------------------------------------------------------------------------------------ |
 | `SELECT`    | Choose the track (1–9).                                                              |
-| `PRESETS`   | Choose the pattern (1–8). While playing, the change happens at the end of the bar.   |
-| `ALGORITHM` | Set the tempo.                                                                       |
+| `PRESETS`   | Choose the pattern (1–16). While playing, the change happens at the end of the bar.  |
+| `ALGORITHM` | On SOUND, FX and GLOBAL, move between the tabs. On the other pages, set the tempo.   |
 | `PLAY`      | Start or stop.                                                                       |
-| `REC`       | Record what you play into the pattern.                                               |
+| `REC`       | A short tap turns step record on or off. Hold it and play for a free take.           |
 | `SAVE`      | Save the song. If it's playing, it saves when you stop (saving pauses the sound).    |
 | `SEL`       | Show the next page of knobs. On PATTERN with a synth track: toggle slide on a step.  |
 | `ARP`       | On PATTERN: set the ratchet of the step under the cursor.                            |
@@ -37,7 +38,9 @@ bar**. The knob bar shows what KNOB1–4 do on the current page, always in the s
 | `SEQ`        | PATTERN             | white keys: the 16 steps; black keys: tracks    | STEP, VOICE (or NOTE), ACCENT, MACHINE                                                                                  |
 | `EDIT`       | SOUND               | play the track                                  | the track's sound (see [Machines](#machines))                                                                           |
 | `HOME`       | MIX                 | white keys: mute tracks 1–9; black keys: tracks | LEVEL, DELAY, REVERB, MUTE                                                                                              |
+| `HOME` again | PATTERNS            | white keys: pick a pattern                      | SAVE held plus a white key copies the current pattern there. Hold two white keys to chain that range.                  |
 | `HOME` again | SCOPE, then MIDI IN | play the track                                  | the MIX knobs. SCOPE shows the output; MIDI IN lists the last messages that came in. `HOME` once more goes back to MIX. |
+| `LFO`        | SAMPLE              | play, or type a name                            | TIME (how long each slot records) and BANK. REC arms the next slot. SAVE names the instrument with the keys.            |
 | `FX`         | FX                  | play the track                                  | 4 pages (press `SEL`): see [Effects](#effects)                                                                          |
 | `GLO`        | GLOBAL              | play the track                                  | TEMPO page: BPM, SWING, LENGTH, THEME; MIDI page: CLOCK, CC OUT. Also shows CPU load.                                   |
 
@@ -45,9 +48,23 @@ bar**. The knob bar shows what KNOB1–4 do on the current page, always in the s
 white keys are BD SD CH OH CP RS LT MT HT CY RD CB TB MA CL TI, and the black keys are BD2 SD2 CB2 and the congas. (On
 the SMP machine, each key plays one sample.) The last voice or note you play is what new steps use.
 
-**Recording:** with `REC` on, what you play goes into the step that is playing. When stopped, it goes into the step
-under the cursor, and the cursor moves to the next step. `REC` also makes the keys play on the PATTERN page, so you can
-watch the grid fill in. Turn it off to go back to editing steps.
+**Recording:** a short tap of `REC` turns step record on. What you play goes into the step that is playing, or, when
+stopped, into the step under the cursor, which then moves on. `REC` also makes the keys play on the PATTERN page.
+
+**A free take:** hold `REC` and play, whether or not the transport is running. Releasing it writes the performance
+onto the grid, from the current pattern forward, up to 16 bars (64 beats). When the transport is stopped it picks a
+tempo in 40–250 BPM, the one closest to the tempo you had, and chains those patterns. When it is already playing, it
+keeps the tempo and quantizes onto it. Only the tracks you played are replaced.
+
+**Patterns:** the PATTERNS page shows all 16. A white key selects one. Hold `SAVE` and press a white key to copy the
+current pattern into that slot (that hold does not also save the song). Hold one white key and press another to chain
+the inclusive range; the chain plays in order and the header shows the pattern that is sounding.
+
+**Sampling:** plug the FM-1 into a host that plays USB audio (an iPad, or the emulator's USB audio button). On SAMPLE,
+TIME is the length of each slot (0.2–2.0 s) and BANK is one of four instruments. REC records the armed slot, then arms
+the next. Slot 0 is F3 and each next slot is the next MIDI note. The first slot of a new pass erases that bank. When
+the eight slots are full the screen says INSTRUMENT. SAVE lets you type a name: white keys A–P, black keys Q–Z and
+space, OCT- deletes, SAVE stores it. Put the USER machine on a track and set BANK; the keys play the slots from F3.
 
 **Editing steps:** on the PATTERN page, a white key turns a step on or off and moves the cursor to it. A new step uses
 the track's current voice (or a synth's last note); KNOB2 changes it. Drum steps are colored by voice, so kicks,

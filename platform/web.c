@@ -165,6 +165,96 @@ int settings_save(const void *p, uint32_t n) {
   return 0;
 }
 
+/* the sample store, in RAM: the page can read it, it does not survive a reload */
+#define STORE_N (STORE_HI - STORE_LO)
+static uint8_t flash_mem[STORE_N];
+static uint8_t flash_ready;
+static void flash_init(void) {
+  uint32_t i;
+  if (flash_ready) {
+    return;
+  }
+  for (i = 0; i < STORE_N; i++) {
+    flash_mem[i] = 0xFF;
+  }
+  flash_ready = 1;
+}
+const uint8_t *store_ptr(uint32_t off) {
+  flash_init();
+  if (off < STORE_LO || off >= STORE_HI) {
+    return 0;
+  }
+  return flash_mem + (off - STORE_LO);
+}
+int store_erase(uint32_t off) {
+  uint32_t i;
+  flash_init();
+  if ((off & 0xFFFu) || off < STORE_LO || off + 0x1000u > STORE_HI) {
+    return -1;
+  }
+  for (i = 0; i < 0x1000u; i++) {
+    flash_mem[off - STORE_LO + i] = 0xFF;
+  }
+  return 0;
+}
+int store_write(uint32_t off, const void *src, uint32_t n) {
+  const uint8_t *s = src;
+  uint32_t i;
+  flash_init();
+  if (!n || off < STORE_LO || off + n > STORE_HI) {
+    return -1;
+  }
+  for (i = 0; i < n; i++) {
+    flash_mem[off - STORE_LO + i] = s[i];
+  }
+  return 0;
+}
+
+/* USB audio in: the worklet copies a block here before web_render */
+#define AIN_N 2048u
+static float ain_l[1024], ain_r[1024];
+static int16_t ain[AIN_N * 2u];
+static volatile uint32_t ain_w, ain_rd;
+static uint8_t ain_on;
+EXPORT(web_in_l)
+float *web_in_l(void) { return ain_l; }
+EXPORT(web_in_r)
+float *web_in_r(void) { return ain_r; }
+EXPORT(web_in_ready)
+void web_in_ready(uint32_t n) {
+  uint32_t i;
+  if (n > 1024u) {
+    n = 1024u;
+  }
+  for (i = 0; i < n; i++) {
+    float l = ain_l[i], r = ain_r[i];
+    if (ain_w - ain_rd >= AIN_N) {
+      ain_rd++;
+    }
+    ain[(ain_w % AIN_N) * 2u] = (int16_t)(l > 1.0f ? 32767 : l < -1.0f ? -32767 : (int32_t)(l * 32767.0f));
+    ain[(ain_w % AIN_N) * 2u + 1u] = (int16_t)(r > 1.0f ? 32767 : r < -1.0f ? -32767 : (int32_t)(r * 32767.0f));
+    ain_w++;
+  }
+  ain_on = 1;
+}
+int usb_audio_active(void) { return ain_on && ain_w != ain_rd; }
+int usb_audio_in(int16_t *lr, uint32_t frames) {
+  uint32_t i;
+  if (!ain_on) {
+    return 0;
+  }
+  for (i = 0; i < frames; i++) {
+    if (ain_rd != ain_w) {
+      lr[2u * i] = ain[(ain_rd % AIN_N) * 2u];
+      lr[2u * i + 1u] = ain[(ain_rd % AIN_N) * 2u + 1u];
+      ain_rd++;
+    } else {
+      lr[2u * i] = lr[2u * i + 1u] = 0;
+    }
+  }
+  return 1;
+}
+
 /* ---- print: a text ring the page drains into its console */
 #define LOG 4096u
 static char log_buf[LOG];

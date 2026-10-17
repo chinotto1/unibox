@@ -363,7 +363,7 @@ $('power').addEventListener('click', async () => {
   try {
     audioCtx = new AudioContext({ sampleRate: 44100, latencyHint: 'interactive' })
     await audioCtx.audioWorklet.addModule('worklet.js')
-    node = new AudioWorkletNode(audioCtx, 'fm1', { numberOfInputs: 0, outputChannelCount: [2] })
+    node = new AudioWorkletNode(audioCtx, 'fm1', { numberOfInputs: 1, outputChannelCount: [2] })
     node.connect(audioCtx.destination)
     node.port.onmessage = (e) => {
       const m = e.data
@@ -377,6 +377,27 @@ $('power').addEventListener('click', async () => {
   } catch (err) {
     say(`could not start: ${err.message}`, true)
     $('power').disabled = false
+  }
+})
+let micStream = null
+let micNode = null
+$('usbaudio').addEventListener('click', async () => {
+  if (!audioCtx || !node) return say('switch the emulator on first', true)
+  if (micNode) {
+    micNode.disconnect()
+    micStream.getTracks().forEach((t) => t.stop())
+    micNode = micStream = null
+    $('usbaudio').textContent = 'USB audio'
+    return
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } })
+    micNode = audioCtx.createMediaStreamSource(micStream)
+    micNode.connect(node)
+    $('usbaudio').textContent = 'USB audio on'
+    say('microphone is the USB audio input (SAMPLE page)')
+  } catch (err) {
+    say(`microphone: ${err.message}`, true)
   }
 })
 $('reset').addEventListener('click', () => reload())

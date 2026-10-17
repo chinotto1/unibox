@@ -51,9 +51,10 @@ static volatile uint32_t fm1_ms; /* milliseconds since power-on (TIMER5) */
 #define FELUCCA_UAC 1
 #include "usb.c"
 
-/* ---- flash: read anywhere; erase / program only the update's staging area and the settings sector */
+/* ---- flash: read anywhere; erase / program the update staging area, the two settings sectors, and the sample store */
 #define SETTINGS_AT 0x000FC000u
-#define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + 0x1000u))
+#define SETTINGS_SPAN 0x00002000u
+#define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + SETTINGS_SPAN) || FL_IN(off, n, STORE_LO, STORE_HI))
 #include "fm1_flash.h"
 static uint8_t flash_ok;
 static int st_read(uint32_t off, void *dst, uint32_t n) {
@@ -169,13 +170,33 @@ int settings_save(const void *p, uint32_t n) {
   }
   memcpy(buf, p, n);
   h[2] = crc32(buf, n);
-  if ((rc = fl_erase4k(SETTINGS_AT, &took)) != 0) {
+  if ((rc = fl_erase4k(SETTINGS_AT, &took)) != 0 || (rc = fl_erase4k(SETTINGS_AT + 0x1000u, &took)) != 0) {
     return rc;
   }
   if ((rc = fl_write(SETTINGS_AT + sizeof h, buf, n)) != 0) {
     return rc;
   }
   return fl_write(SETTINGS_AT, (const uint8_t *)h, sizeof h); /* the header last: a cut save stays invalid */
+}
+
+const uint8_t *store_ptr(uint32_t off) {
+  if (!flash_ok || off < STORE_LO || off >= STORE_HI) {
+    return 0;
+  }
+  return (const uint8_t *)FL_XIP(off);
+}
+int store_erase(uint32_t off) {
+  uint32_t took;
+  if (!flash_ok || (off & 0xFFFu) || off < STORE_LO || off + 0x1000u > STORE_HI) {
+    return -1;
+  }
+  return fl_erase4k(off, &took);
+}
+int store_write(uint32_t off, const void *src, uint32_t n) {
+  if (!flash_ok || !n || off < STORE_LO || off + n > STORE_HI) {
+    return -1;
+  }
+  return fl_write(off, src, n);
 }
 
 /* ---- MIDI over USB: 4-byte USB-MIDI packets, cable 0 */
@@ -260,6 +281,7 @@ void fm1_timer5_irq(void) {
   if (in_audio) {
     if (usb_due) {
       uac_service();
+      uac_out_service();
     }
     return;
   }
@@ -395,6 +417,9 @@ void fm1_cstart(void) {
     recovery_main(); /* OCT- at power-on: the USB rescue */
   }
   flash_ok = FL_FAR(fl_jedec_ram)() == 0x856014u;
+  if (flash_ok) {
+    fl_plain_window_init(); /* the sample store is read through XIP */
+  }
   ota_boot_cleanup();
   lcd_init();
   lcd_fill(0, 0, 240, 240, C_BLACK);

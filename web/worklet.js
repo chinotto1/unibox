@@ -82,6 +82,18 @@ class FM1 extends AudioWorkletProcessor {
     const out = outputs[0]
     const n = out[0].length
     try {
+      const input = inputs[0]
+      if (input && input[0] && ex.web_in_ready) {
+        const L = input[0]
+        const R = input[1] || L
+        const memL = new Float32Array(this.mem.buffer, ex.web_in_l(), n)
+        const memR = new Float32Array(this.mem.buffer, ex.web_in_r(), n)
+        for (let i = 0; i < n; i++) {
+          memL[i] = L[i] || 0
+          memR[i] = R[i] || 0
+        }
+        ex.web_in_ready(n)
+      }
       ex.web_render(n)
       for (let m; (m = ex.web_midi_out()) >= 0;) this.midi.push(m)
     } catch (err) {

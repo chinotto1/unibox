@@ -1,12 +1,13 @@
-/* FOMAJAM: what the screen (main.c) and the sound (engine.c, drums.c, synths.c) share. */
+/* UNIBOX: what the screen (main.c) and the sound (engine.c, drums.c, synths.c, sampler.c) share. */
 #ifndef GROOVE_H
 #define GROOVE_H
 #include "fm1.h"
 
 #define TRACKS 9 /* each plays one machine: a drum machine, or a synth engine */
 #define STEPS 16
-#define PATTERNS 8
-#define SONG_VERSION 7
+#define PATTERNS 16
+#define SONG_VERSION 8
+#define ENGINE_PARAMS 16 /* a synth engine's own parameters: up to four tabs of four */
 
 /* a step: what plays (a drum machine's voice, or a synth's MIDI note) and how */
 #define STEP_ON 1
@@ -25,7 +26,7 @@ typedef struct {
   uint8_t tune, decay, tone, extra;     /* a drum machine's (a synth: TUNE) */
   uint8_t slide;                        /* a synth's glide */
   uint8_t rsend, csend, duck;           /* sends to the reverb and the chorus; how much track 1 ducks it */
-  int8_t e[8];                          /* a synth engine's own parameters (synth_param) */
+  int8_t e[ENGINE_PARAMS];              /* a synth engine's own parameters (synth_param) */
   uint8_t atk, dec, sus, rel;           /* its envelope */
   int8_t fenv;                          /* its envelope's sweep of the filter, -64..63 */
   uint8_t ftype, preset, mono;          /* ANALOG's filter type; the preset it came from; 1: one voice, legato */
@@ -53,6 +54,10 @@ typedef struct {
   uint8_t filter, reso;   /* the master filter: 0..63 low-pass, 64 off, 65..127 high-pass */
   uint8_t dtype;          /* the distortion's kind (D_*); DRIVE is song.drive */
   uint8_t ccout;          /* 1: parameters changed here are sent out as MIDI CC (CC.md) */
+  /* (added in version 8) */
+  uint8_t chain_a, chain_b; /* inclusive pattern range that plays in order; equal: just the one */
+  uint8_t take_bpm;         /* the tempo the last free take found, 0: none yet */
+  uint8_t pad[1];
 } song_t;
 
 _Static_assert(sizeof(song_t) <= SETTINGS_MAX, "the song must fit in the settings");
@@ -82,6 +87,7 @@ int machine_find(const char *name, int otherwise);
 int machine_synth(int m);      /* 1: a synth engine (its voices are notes) */
 int machine_engine(int m);     /* the synth engine (synths.c) it is, or -1 */
 int machine_midi(int m);       /* 1: MIDI out (its voices are notes, sent, not heard) */
+int machine_usr(int m);        /* 1: a sampled instrument (notes, from F3) */
 const char *machine_label(int m); /* 3 characters, for the grid */
 int machine_voices(int m);     /* how many voice numbers it has (22, the samples, or 128 notes) */
 int machine_has(int m, int v); /* 1: its own voice; 2: played by a neighbor; 0: silent */
@@ -102,7 +108,9 @@ enum { SF_NUM,
 int synth_count(void);
 const char *synth_name(int e);
 const char *synth_label(int e);
-const char *synth_page(int e, int page); /* the titles of the engine's two pages of parameters */
+const char *synth_page(int e, int page); /* one tab title, or 0 past the engine's last tab */
+int synth_pages(int e);                  /* how many tabs of four parameters the engine has (1..4) */
+int synth_ownenv(int e);                 /* 1: the engine's own envelope is the voice (the 303) */
 void synth_param(int t, int k, synth_param_t *out); /* parameter k of track t's engine, as it has it set */
 int synth_presets(int e);
 const char *synth_preset_name(int e, int p);

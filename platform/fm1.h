@@ -6,7 +6,7 @@
  *   void loop(void)                            over and over; keep each pass short (a few ms)
  *   void audio(int32_t *out, uint32_t frames)  the sound: add to out, L R L R ..., +-32767
  *
- * The chip has no FPU: integers only (no float, no double, no 64-bit division). */
+ * The FPU is single precision: float is fine, double is not (no soft-float library). */
 #ifndef FM1_H
 #define FM1_H
 #include <stdint.h>
@@ -91,11 +91,24 @@ int text_height(int font);
 int midi_read(uint8_t *status, uint8_t *d1, uint8_t *d2); /* 1: got one */
 void midi_send(uint8_t status, uint8_t d1, uint8_t d2);
 
-/* ---- settings: up to SETTINGS_MAX bytes that survive power-off (one 4 KiB flash sector, less a header). Saving stalls the sound for ~50 ms:
- * save when nothing plays, never in a loop (flash wears out) */
-#define SETTINGS_MAX 4084u
+/* ---- settings: up to SETTINGS_MAX bytes that survive power-off (two 4 KiB flash sectors, less a header).
+ * Saving stalls the sound for ~100 ms: save when nothing plays, never in a loop (flash wears out) */
+#define SETTINGS_MAX (8192u - 16u)
 int settings_load(void *p, uint32_t n); /* 0: loaded; else p is untouched */
 int settings_save(const void *p, uint32_t n);
+
+/* ---- the sample store: the flash between the program and the update area (0x97000..0xE0000).
+ * store_ptr stays valid until that sector is erased. Erasing stalls the sound for ~50 ms. */
+#define STORE_LO 0x00097000u
+#define STORE_HI 0x000E0000u
+const uint8_t *store_ptr(uint32_t off); /* 0 when off is outside the store */
+int store_erase(uint32_t off);          /* one 4 KiB sector; 0: done */
+int store_write(uint32_t off, const void *src, uint32_t n);
+
+/* ---- USB audio from the host (an iPad on the USB-C port): 16-bit stereo at 44100.
+ * 1: the host is streaming (silence if a packet was late). 0: nothing is connected. */
+int usb_audio_in(int16_t *lr, uint32_t frames);
+int usb_audio_active(void);
 
 /* ---- helpers for sound without floats */
 int32_t sine(uint32_t phase);          /* a full cycle over 2^32 -> -32767..32767 */

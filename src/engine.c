@@ -6,6 +6,7 @@
  * tracks' notes and note-offs, the clock, and whatever loop() queues with midi_out() (controllers, program
  * changes, notes played live). */
 #include "groove.h"
+#include "sampler.h"
 
 song_t song;
 volatile uint8_t playing;
@@ -126,7 +127,8 @@ static void rat_tick(uint32_t n) {
   }
 }
 
-static int32_t ctr;             /* frames to the next step */
+static uint8_t chain_from = 0xFF; /* song.pattern the chain last started from; a different one is a user pick */
+static int32_t ctr;                /* frames to the next step */
 static uint32_t step_frames;    /* the step playing's length */
 static uint32_t clk_acc, clk_n; /* MIDI clock: 6 ticks per 16th note, the first on the step */
 
@@ -135,7 +137,22 @@ static void next_step(void) {
                                                       : song.length;
   int s = play_step + 1 >= len ? 0 : play_step + 1, prev = s ? s - 1 : len - 1;
   if (!s) {
-    cur_pattern = song.pattern;
+    int a = song.chain_a, b = song.chain_b;
+    if (a > b) {
+      int swap = a;
+      a = b;
+      b = swap;
+    }
+    if (b >= PATTERNS) {
+      b = PATTERNS - 1;
+    }
+    if (b > a && song.pattern == chain_from && cur_pattern >= a && cur_pattern <= b) {
+      int n = cur_pattern + 1;
+      cur_pattern = (uint8_t)(n > b ? a : n);
+    } else {
+      cur_pattern = song.pattern;
+      chain_from = song.pattern;
+    }
   }
   play_step = (int8_t)s;
   const pattern_t *p = &song.pat[cur_pattern];
@@ -231,6 +248,7 @@ void audio(int32_t *out, uint32_t frames) {
   static uint8_t was;
   static uint32_t avg, peak; /* Q8 % */
   uint32_t t0 = micros();
+  sampler_pull(dline, DLINE, frames > 256 ? 256 : frames);
   if (frames > 256) {
     frames = 256;
   }
@@ -276,6 +294,7 @@ void audio(int32_t *out, uint32_t frames) {
       }
     } else {
       cur_pattern = song.pattern;
+      chain_from = 0xFF; /* the first bar picks song.pattern, then the chain may walk on */
       for (int t = 0; t < TRACKS; t++) { /* each MIDI track's program, as the song starts */
         if (is_midi(t) && song.track[t].prog) {
           midi_send((uint8_t)(0xC0 | (song.track[t].mch & 15)), (uint8_t)(song.track[t].prog - 1), 0);
@@ -304,7 +323,10 @@ void audio(int32_t *out, uint32_t frames) {
   }
   int32_t fb = song.dfdbk * 230;
   uint32_t dl = dlen;
-  for (uint32_t i = 0; i < frames; i++) { /* the delay */
+  if (sampler_busy()) { /* the delay line is the sample being recorded */
+    fb = 0;
+  }
+  for (uint32_t i = 0; i < frames && !sampler_busy(); i++) { /* the delay */
     uint32_t r = dpos >= dl ? dpos - dl : dpos + DLINE - dl;
     int32_t wet = dline[r];
     dline[dpos] = (int16_t)clamp(snd[i] + (wet * fb >> 15), -32767, 32767);

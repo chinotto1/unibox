@@ -45,7 +45,29 @@ int32_t encoder(int e) { return 0; }
 int key_pressed(int k) { return 0; }
 int key_released(int k) { return 0; }
 int button_pressed(int b) { return 0; }
+int button_held(int b) { return 0; }
+int button_released(int b) { return 0; }
 uint32_t keys(void) { return 0; }
+int usb_audio_active(void) { return 0; }
+int usb_audio_in(int16_t *lr, uint32_t n) {
+  (void)lr;
+  (void)n;
+  return 0;
+}
+const uint8_t *store_ptr(uint32_t off) {
+  (void)off;
+  return 0;
+}
+int store_erase(uint32_t off) {
+  (void)off;
+  return 0;
+}
+int store_write(uint32_t off, const void *src, uint32_t n) {
+  (void)off;
+  (void)src;
+  (void)n;
+  return 0;
+}
 void led_key(int k, int o) {}
 void led_button(int b, int o) {}
 int midi_read(uint8_t *a, uint8_t *b, uint8_t *c) { return 0; }

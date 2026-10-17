@@ -110,9 +110,15 @@ typedef struct {                 /* per-voice control-rate modulation, computed 
     int32_t fine;                /* the residual below 1/16 semitone in inc: unison detune, TUNE, bend (1/4096) */
 } vmod_t;
 
+/* unibox: engines may have up to FE_NPARAMS (16) parameters over FE_NPAGES (4) pages of four; Felucca's own
+ * engines use the first 8 and two pages, and initialise these arrays partially as before */
+#ifndef FE_NPARAMS
+#define FE_NPARAMS 16
+#define FE_NPAGES 4
+#endif
 typedef struct {
     const char *name;
-    int8_t e[8];                 /* P_E0..P_E7 (signed: an interval below the note; every value fits) */
+    int8_t e[FE_NPARAMS];        /* P_E0..P_E15 (signed: an interval below the note; every value fits) */
     uint8_t env[4];              /* ATK DEC SUS REL */
     int8_t fenv;                 /* ENV -> FILTER amount (-64..63) */
     uint8_t mono;                /* 1 = MONO (bass / lead), 0 = POLY */
@@ -128,8 +134,8 @@ typedef struct {
 struct track;
 typedef struct {                 /* an engine (engines.c ENGINES[]; the eng_*.c files) */
     const char *name;            /* "ANALOG" (PRESETS, the editor) */
-    const char *page_title[2];   /* EDIT 1 and EDIT 2 */
-    param_desc_t edit[8];        /* P_E0..P_E7 */
+    const char *page_title[FE_NPAGES];   /* EDIT 1 .. 4 (unibox: 0 = the engine has no such page) */
+    param_desc_t edit[FE_NPARAMS];       /* P_E0..P_E15 */
     const preset_t *presets;
     uint8_t npresets;
     uint8_t knob[4];             /* HOME: the four parameters on KNOB 1..4 */
