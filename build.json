@@ -1,0 +1,1 @@
+{"id": "1792201314007135381", "wasm": true, "fwsc": true, "log": "samples   0 from samples/, 0 KiB\nroms      LINN DMX, 164 KiB\nemulator  build/web/firmware.wasm  399 KiB\nFM-1      build/unibox-0.2.fwsc  identity FM-1_972  (code 346 of 567 KiB, RAM 69 of 96 KiB, pool 317 of 336 KiB)", "name": "UNIBOX", "version": "0.2", "identity": "FM-1_972", "ok": true}
