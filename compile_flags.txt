@@ -1,0 +1,8 @@
+-Iplatform
+-Iplatform/hal
+-Iplatform/src
+-Iplatform/gen
+-Wall
+-Ibuild/gen
+-Ivendor/felucca-engines/src
+-Ivendor/felucca
