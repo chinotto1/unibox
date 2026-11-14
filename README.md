@@ -260,3 +260,5 @@ rescue mode, then install from the page.
 ## License
 
 GPL-3.0-only. For credits and third-party parts, see [LICENSING.md](LICENSING.md).
+
+You can also try Unibox in the browser, no flashing needed, in the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
